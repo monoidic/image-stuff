@@ -51,9 +51,9 @@ def get_section_bytes(intup):
   return ret
 
 def parse_jpeg(raw):
-  ret = []
   if raw[:2] != b'\xff\xd8': # if not a jpeg
     return
+  ret = []
   parseraw = raw
   while parseraw:
     curr_header = parseraw[:2]
