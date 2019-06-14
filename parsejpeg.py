@@ -79,11 +79,11 @@ def parse_jpeg(raw):
     else:
       parseraw = parseraw[2:] # skip past marker
     ret.append((name, parseraw[:size]))
-    if name == 'EOI':
+    parseraw = parseraw[size:]
+    if name == 'EOI' and parseraw:
       print('Additional data after end of image')
       ret.append(('OTHERDATA', parseraw[size:]))
       return ret
-    parseraw = parseraw[size:]
   return ret
 
 def rev_parsed(parsed):

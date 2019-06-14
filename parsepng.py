@@ -2,8 +2,9 @@
 
 import binascii
 
+png_header = b'\x89PNG\r\n\x1a\n'
 def parse_png(raw):
-  if raw[:8] != b'\x89PNG\r\n\x1a\n':
+  if raw[:8] != png_header:
     return # not a PNG
   ret = []
   parseraw = raw[8:]
@@ -19,6 +20,19 @@ def parse_png(raw):
       ret.append(('Additional', parseraw))
   return ret
 
+def revparse_png(data):
+  ret = png_header
+  for chunk in data:
+    chunktype = chunk[0]
+    chunkdata = chunk[1]
+    if chunktype == 'Additional':
+      ret += chunkdata
+      break
+    chunklen = int.to_bytes(len(chunkdata), 4, 'big')
+    chunkcrc = int.to_bytes(binascii.crc32(chunktype + chunkdata), 4, 'big')
+    ret += chunklen + chunktype + chunkdata + chunkcrc
+  return ret
+
 if __name__ == '__main__':
   import sys
   if len(sys.argv) < 2:
@@ -30,4 +44,9 @@ if __name__ == '__main__':
   parsed = parse_png(pngraw)
   out = [(name, len(data)) for name, data in parsed]
   print(out)
+  if len(sys.argv) != 3:
+    exit(0)
+  revparsed = revparse_png(parsed)
+  with open(sys.argv[2], 'wb') as fd:
+    fd.write(revparsed)
 #  print(parsed)
