@@ -101,7 +101,7 @@ if __name__ == '__main__':
     injpeg = fd.read()
   parsed_jpeg = parse_jpeg(injpeg)
 #  print(parsed_jpeg)
-  print([x for x, _y in parsed_jpeg])
+  print([(x, f'{len(y)} bytes') for x, y in parsed_jpeg])
 
   if len(sys.argv) < 3:
     exit(0)
