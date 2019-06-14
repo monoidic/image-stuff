@@ -43,7 +43,7 @@ def get_section_bytes(intup):
     num = int(name[3:])
     ret += bytes([0xff, 0xe0 + num]) # header
     ret += int.to_bytes(len(data)+2, 2, 'big') #length
-  elif name == 'Entropy':
+  elif name == 'Entropy' or name == 'OTHERDATA':
     pass
   else:
     return
@@ -80,6 +80,8 @@ def parse_jpeg(raw):
       parseraw = parseraw[2:] # skip past marker
     ret.append((name, parseraw[:size]))
     if name == 'EOI':
+      print('Additional data after end of image')
+      ret.append(('OTHERDATA', parseraw[size:]))
       return ret
     parseraw = parseraw[size:]
   return ret
@@ -94,7 +96,7 @@ if __name__ == '__main__':
   import sys
 
   if len(sys.argv) < 2:
-    print('Enter path to jpeg')
+    print('Enter path to *single* jpeg to analyze (and a path to an output file to test reverting parsed data to a jpeg)')
     exit(1)
 
   with open(sys.argv[1], 'rb') as fd:
@@ -103,7 +105,7 @@ if __name__ == '__main__':
 #  print(parsed_jpeg)
   print([(x, f'{len(y)} bytes') for x, y in parsed_jpeg])
 
-  if len(sys.argv) < 3:
+  if len(sys.argv) != 3:
     exit(0)
 
   revparsed = rev_parsed(parsed_jpeg)
