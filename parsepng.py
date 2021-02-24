@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import binascii
+import zlib
 
 png_header = b'\x89PNG\r\n\x1a\n'
 def parse_png(raw):
@@ -29,7 +29,7 @@ def revparse_png(data):
       ret += chunkdata
       break
     chunklen = int.to_bytes(len(chunkdata), 4, 'big')
-    chunkcrc = int.to_bytes(binascii.crc32(chunktype + chunkdata), 4, 'big')
+    chunkcrc = int.to_bytes(zlib.crc32(chunktype + chunkdata), 4, 'big')
     ret += chunklen + chunktype + chunkdata + chunkcrc
   return ret
 
