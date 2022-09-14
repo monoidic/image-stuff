@@ -18,6 +18,11 @@ def parse_png(raw):
     if chunktype == b'IEND' and parseraw:
       print('Additional data after end of image')
       ret.append(('Additional', parseraw))
+  dat = bytearray()
+  for section in ret:
+    if section[0] == b'IDAT':
+      dat.extend(section[1])
+  ret.append(('dat', zlib.decompress(dat)))
   return ret
 
 def revparse_png(data):
