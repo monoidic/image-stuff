@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+import io
+
+from typing import Optional
+
 table = {
   b'\xff\xd8': 'SOI',  b'\xff\xc0': 'SOF0',
   b'\xff\xc2': 'SOF2', b'\xff\xc4': 'DHT',
@@ -16,12 +20,12 @@ markerlen = { # number signifies static size, None signifies variable size
   'EOI': 0
 } # RSTn, APPn
 
-def get_section_type(header):
+def get_section_type(header: bytes) -> Optional[tuple[str, int]]:
   if header in table:
     name = table[header]
     return (name, markerlen[name])
   elif b'\xff\xd0' <= header <= b'\xff\xd7':
-    n = header[1] ^ 0x70
+    n = header[1] ^ 0xd0
     return (f'RST{n}', 0) # 0
   elif b'\xff\xe0' <= header <= b'\xff\xef':
     n = header[1] ^ 0xe0
@@ -52,45 +56,73 @@ def get_section_bytes(intup):
 
 def parse_jpeg(raw):
   if raw[:2] != b'\xff\xd8': # if not a jpeg
-    return
+      return
   ret = []
   parseraw = raw
   while parseraw:
-    curr_header = parseraw[:2]
-    type = get_section_type(curr_header)
-    if type == None: # entropy-encoded data
-      offset = 0
-      while True:
-        parse_offset = parseraw[offset:] # offset to work from, in case of 0xff00
-        if not parse_offset: # if end of file is hit
-          return ret
-        ent_size = parse_offset.find(b'\xff') + offset
-        if parseraw[ent_size:ent_size+2] == b'\xff\x00': # skip past 0xff00
-          offset = ent_size + 1
+      curr_header = parseraw[:2]
+      type = get_section_type(curr_header)
+      if type == None: # entropy-encoded data
+          offset = 0
+          while True:
+              parse_offset = parseraw[offset:] # offset to work from, in case of 0xff00
+              if not parse_offset: # if end of file is hit
+                  return ret
+              ent_size = parse_offset.find(b'\xff') + offset
+              if parseraw[ent_size:ent_size+2] == b'\xff\x00': # skip past 0xff00
+                  offset = ent_size + 1
+                  continue
+              ret.append(('Entropy', parseraw[:ent_size])) # add entropy section
+              parseraw = parseraw[ent_size:]
+              break
           continue
-        ret.append(('Entropy', parseraw[:ent_size])) # add entropy section
-        parseraw = parseraw[ent_size:]
-        break
-      continue
-    name, size = type
-    if size == None:
-      size = int.from_bytes(parseraw[2:4], 'big') - 2 #ignore size section
-      parseraw = parseraw[4:] # skip past marker and size
-    else:
-      parseraw = parseraw[2:] # skip past marker
-    ret.append((name, parseraw[:size]))
-    parseraw = parseraw[size:]
-    if name == 'EOI' and parseraw:
-      print('Additional data after end of image')
-      ret.append(('OTHERDATA', parseraw[size:]))
-      return ret
+      name, size = type
+      if size == None:
+          size = int.from_bytes(parseraw[2:4], 'big') - 2 #ignore size section
+          parseraw = parseraw[4:] # skip past marker and size
+      else:
+          parseraw = parseraw[2:] # skip past marker
+      ret.append((name, parseraw[:size]))
+      parseraw = parseraw[size:]
+      if name == 'EOI' and parseraw:
+          print('Additional data after end of image')
+          ret.append(('OTHERDATA', parseraw[size:]))
+          return ret
   return ret
 
+def parse_jpeg2(fd: io.BytesIO) -> list[tuple[str, bytes]]:
+  fd.seek(0)
+  if fd.read(3) != b'\xff\xd8\xff':
+    raise Exception('invalid jpeg')
+  fd.seek(0)
+  
+  ret = []
+  while True:
+    section_hdr = fd.read(2)
+    if not section_hdr:
+        break
+    section_t = get_section_type(section_hdr)
+    if section_t:
+        section_name, section_len = section_t
+        if section_len is None:
+            section_len = int.from_bytes(fd.read(2), 'big') - 2
+        ret.append((section_name, fd.read(section_len)))
+
+        if section_name == 'EOI':
+          rest = fd.read()
+          if rest:
+            ret.append(('OTHERDATA', rest))
+          break
+        continue
+    # entropy TODO
+    pass
+  
+  return ret
+
+
+
 def rev_parsed(parsed):
-  out = b''
-  for section in parsed:
-    out += get_section_bytes(section)
-  return out
+  return b''.join(get_section_bytes(section) for section in parsed)
 
 if __name__ == '__main__':
   import sys
@@ -100,10 +132,9 @@ if __name__ == '__main__':
     exit(1)
 
   with open(sys.argv[1], 'rb') as fd:
-    injpeg = fd.read()
-  parsed_jpeg = parse_jpeg(injpeg)
-#  print(parsed_jpeg)
-  print([(x, f'{len(y)} bytes') for x, y in parsed_jpeg])
+      parsed_jpeg = parse_jpeg2(fd)
+  print(parsed_jpeg)
+#  print([(x, f'{len(y)} bytes') for x, y in parsed_jpeg])
 
   if len(sys.argv) != 3:
     exit(0)
