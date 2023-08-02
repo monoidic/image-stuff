@@ -1,160 +1,205 @@
 #!/usr/bin/env python3
 
 import io
+import os
+import sys
+import struct
 
-from typing import Optional
+from dataclasses import dataclass
+from enum import IntEnum
+from io import BytesIO
+from typing import Iterable
 
-table = {
-    b'\xff\xd8': 'SOI',  b'\xff\xc0': 'SOF0',
-    b'\xff\xc2': 'SOF2', b'\xff\xc4': 'DHT',
-    b'\xff\xdb': 'DQT',  b'\xff\xdd': 'DRI',
-    b'\xff\xda': 'SOS',  b'\xff\xfe': 'COM',
-    b'\xff\xd9': 'EOI',
-} # RSTn, APPn
 
-revtable = { val: key for key, val in table.items() }
+be_short = '>H'
 
-markerlen = { # number signifies static size, None signifies variable size
-    'SOI': 0, 'SOF0': None, 'SOF2': None, 'DHT': None,
-    'DQT': None, 'DRI': 4, 'SOS': None, 'COM': None,
-    'EOI': 0,
-} # RSTn, APPn
+class Marker(IntEnum):
+    SOI = 0xd8
+    SOF0 = 0xc0
+    SOF2 = 0xc2
+    DHT = 0xc4
+    DQT = 0xdb
+    DRI = 0xdd
+    SOS = 0xda
 
-def get_section_type(header: bytes) -> Optional[tuple[str, int]]:
-    if header in table:
-        name = table[header]
-        return (name, markerlen[name])
-    elif b'\xff\xd0' <= header <= b'\xff\xd7':
-        n = header[1] ^ 0xd0
-        return (f'RST{n}', 0) # 0
-    elif b'\xff\xe0' <= header <= b'\xff\xef':
-        n = header[1] ^ 0xe0
-        return (f'APP{n}', None) # None
+    RST0 = 0xd0
+    RST1 = 0xd1
+    RST2 = 0xd2
+    RST3 = 0xd3
+    RST4 = 0xd4
+    RST5 = 0xd5
+    RST6 = 0xd6
+    RST7 = 0xd7
 
-def get_section_bytes(intup):
-  """ return full section (header, size, body) from header+body """
-  ret = b''
-  name = intup[0]
-  data = intup[1]
-  if name in markerlen:
-    ret += revtable[name] # header
-    if markerlen[name] == None:
-      ret += int.to_bytes(len(data)+2, 2, 'big') # length
-  elif name[:3] == 'RST':
-    num = int(name[3:])
-    ret += bytes([0xff, 0xd0 + num]) # header
-  elif name[:3] == 'APP':
-    num = int(name[3:])
-    ret += bytes([0xff, 0xe0 + num]) # header
-    ret += int.to_bytes(len(data)+2, 2, 'big') #length
-  elif name == 'Entropy' or name == 'OTHERDATA':
-    pass
-  else:
-    return
-  ret += data # body
-  return ret
+    APP0 = 0xe0
+    APP1 = 0xe1
+    APP2 = 0xe2
+    APP3 = 0xe3
+    APP4 = 0xe0
+    APP5 = 0xe0
+    APP6 = 0xe0
+    APP7 = 0xe0
+    APP8 = 0xe0
+    APP9 = 0xe9
+    APP10 = 0xea
+    APP11 = 0xeb
+    APP12 = 0xec
+    APP13 = 0xed
+    APP14 = 0xee
+    APP15 = 0xef
 
-def parse_jpeg(raw):
-  if raw[:2] != b'\xff\xd8': # if not a jpeg
-      return
-  ret = []
-  parseraw = raw
-  while parseraw:
-      curr_header = parseraw[:2]
-      type = get_section_type(curr_header)
-      if type == None: # entropy-encoded data
-          offset = 0
-          while True:
-              parse_offset = parseraw[offset:] # offset to work from, in case of 0xff00
-              if not parse_offset: # if end of file is hit
-                  return ret
-              ent_size = parse_offset.find(b'\xff') + offset
-              if parseraw[ent_size:ent_size+2] == b'\xff\x00': # skip past 0xff00
-                  offset = ent_size + 1
-                  continue
-              ret.append(('Entropy', parseraw[:ent_size])) # add entropy section
-              parseraw = parseraw[ent_size:]
-              break
-          continue
-      name, size = type
-      if size == None:
-          size = int.from_bytes(parseraw[2:4], 'big') - 2 #ignore size section
-          parseraw = parseraw[4:] # skip past marker and size
-      else:
-          parseraw = parseraw[2:] # skip past marker
-      ret.append((name, parseraw[:size]))
-      parseraw = parseraw[size:]
-      if name == 'EOI' and parseraw:
-          print('Additional data after end of image')
-          ret.append(('OTHERDATA', parseraw[size:]))
-          return ret
-  return ret
+    COM = 0xfe
+    EOI = 0xd9
 
-def parse_jpeg2(fd: io.BytesIO) -> list[tuple[str, bytes]]:
-    fd.seek(0)
-    if fd.read(3) != b'\xff\xd8\xff':
-        raise Exception('invalid jpeg')
-    fd.seek(0)
-    ret = []
+    Entropy = 0x100
+    Extra = 0x101
+
+
+@dataclass
+class DataChunk:
+    marker: Marker
+    data: bytes
+
+
+# number signifies static size, None signifies variable size
+markerlen = {
+    Marker.SOI: 0,
+    Marker.SOF0: None,
+    Marker.SOF2: None,
+    Marker.DHT: None,
+    Marker.DQT: None,
+    Marker.DRI: 4,
+    Marker.SOS: None,
+
+    Marker.RST0: 0,
+    Marker.RST1: 0,
+    Marker.RST2: 0,
+    Marker.RST3: 0,
+    Marker.RST4: 0,
+    Marker.RST5: 0,
+    Marker.RST6: 0,
+    Marker.RST7: 0,
+
+    Marker.APP0: None,
+    Marker.APP1: None,
+    Marker.APP2: None,
+    Marker.APP3: None,
+    Marker.APP4: None,
+    Marker.APP5: None,
+    Marker.APP6: None,
+    Marker.APP7: None,
+    Marker.APP8: None,
+    Marker.APP9: None,
+    Marker.APP10: None,
+    Marker.APP11: None,
+    Marker.APP12: None,
+    Marker.APP13: None,
+    Marker.APP14: None,
+    Marker.APP15: None,
+
+    Marker.COM: None,
+    Marker.EOI: 0,
+}
+
+
+def parse_to_chunks(fd: BytesIO) -> Iterable[DataChunk]:
+    # expect SOI first
+    first = fd.read(2)
+    if first != b'\xff\xd8':
+        raise ValueError('not JPEG?')
+    yield DataChunk(Marker.SOI, b'')
+
     while True:
-        section_hdr = fd.read(2)
-        if not section_hdr:
-            break
-        section_t = get_section_type(section_hdr)
-        if not section_t:
-            ret.append(('Entropy', read_entropy(fd)))
-            continue
-        section_name, section_len = section_t
-        if section_len is None:
-            section_len = int.from_bytes(fd.read(2), 'big') - 2
-        ret.append((section_name, fd.read(section_len)))
-
-        if section_name == 'EOI':
-            rest = fd.read()
-            if rest:
-                ret.append(('OTHERDATA', rest))
-            break
-        
-
-    return ret
-
-def read_entropy(fd: io.BytesIO) -> bytes:
-    buf = bytearray()
-    while True:
-        b = fd.read(1)[0]
-        if b != 0xff:
-            buf.append(b)
-            continue
-        
-        # ff00 or next header
-        if fd.read(1)[0] == 0:
-            buf.extend(b'\xff\x00')
+        first = fd.read(1)
+        if not first:
+            raise ValueError('unexpected end of file')
+        if first == b'\xff':
+            chunk = read_chunk(fd)
         else:
-            fd.seek(-2, 1)
+            chunk = read_entropy(fd)
+
+        yield chunk
+        if chunk.marker == Marker.EOI:
             break
-    
-    return bytes(buf)
+
+    remaining = fd.read()
+    if remaining:
+        yield DataChunk(Marker.Extra, remaining)
 
 
-def rev_parsed(parsed):
-    return b''.join(get_section_bytes(section) for section in parsed)
+def read_chunk(fd: BytesIO) -> DataChunk:
+    marker = Marker(fd.read(1)[0])
+    section_len = markerlen[marker]
+    if section_len is None:
+        section_len = struct.unpack(be_short, fd.read(2))[0] - 2
+    data = fd.read(section_len)
+
+    return DataChunk(marker, data)
+
+
+def read_entropy(fd: BytesIO) -> DataChunk:
+    fd.seek(-1, os.SEEK_CUR)  # initial byte
+    buf = bytearray()
+
+    while True:
+        byte = fd.read(1)
+        if not byte:
+            raise ValueError('unexpected early end of file')
+
+        if byte != b'\xff':
+            buf.extend(byte)
+            continue
+
+        byte = fd.read(1)
+        if not byte:
+            raise ValueError('unexpected early end of file')
+
+        if byte == b'\x00':
+            buf.extend(b'\xff')
+            continue
+        fd.seek(-2, os.SEEK_CUR)
+        break
+
+    return DataChunk(Marker.Entropy, bytes(buf))
+
+
+def rev_parsed(fd: BytesIO, it: Iterable[DataChunk]) -> None:
+    for chunk in it:
+        if chunk.marker == Marker.Entropy:
+            fd.write(chunk.data.replace(b'\xff', b'\xff\x00'))
+            continue
+        elif chunk.marker == Marker.Extra:
+            fd.write(chunk.data)
+            break
+
+        fd.write(b'\xff')
+        fd.write(bytes([int(chunk.marker)]))
+        if markerlen[chunk.marker] is None:
+            fd.write(struct.pack(be_short, len(chunk.data) + 2))
+        fd.write(chunk.data)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print(
+            'Enter path to *single* jpeg to analyze (and a path to '
+            'an output file to test reverting parsed data to a jpeg)'
+        )
+        return
+
+    filename = sys.argv[1]
+    with open(filename, 'rb') as fd:
+        for x in parse_to_chunks(fd):
+            print(x.marker.name, len(x.data))
+
+        if len(sys.argv) != 3:
+            return
+
+        fd.seek(0)
+        out_name = sys.argv[2]
+        with open(out_name, 'wb') as out_fd:
+            rev_parsed(out_fd, parse_to_chunks(fd))
+
 
 if __name__ == '__main__':
-    import sys
-    
-    if len(sys.argv) < 2:
-        print('Enter path to *single* jpeg to analyze (and a path to an output file to test reverting parsed data to a jpeg)')
-        exit(1)
-    with open(sys.argv[1], 'rb') as fd:
-        parsed_jpeg = parse_jpeg2(fd)
-
-    for name, data in parsed_jpeg:
-        print(name, len(data))
-#  print([(x, f'{len(y)} bytes') for x, y in parsed_jpeg])
-
-    if len(sys.argv) != 3:
-        exit(0)
-
-    revparsed = rev_parsed(parsed_jpeg)
-    with open(sys.argv[2], 'wb') as fd:
-        fd.write(revparsed)
+    main()
