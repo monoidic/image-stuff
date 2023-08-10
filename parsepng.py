@@ -17,22 +17,41 @@ class ChunkData:
     chunktype: bytes
     chunkdata: bytes
 
-
-def get_png_chunks(fd: BytesIO) -> Iterable[ChunkData]:
-    if fd.read(8) != png_header:
-        raise ValueError('not a PNG')
-
-    while True:
+    @staticmethod
+    def from_fd(fd: BytesIO, validate_crc: bool = False) -> 'ChunkData':
         first = fd.read(4)
         if len(first) != 4:
             raise ValueError('unexpected early end of file')
         chunklen = int.from_bytes(first, 'big')
         chunktype = fd.read(4)
         chunkdata = fd.read(chunklen)
-        fd.read(4)  # crc
+        crc = fd.read(4)
+        if len(crc) != 4:
+            raise ValueError('unexpected early end of file')
 
-        yield ChunkData(chunktype, chunkdata)
-        if chunktype == b'IEND':
+        if validate_crc:
+            correct_crc = zlib.crc32(chunktype + chunkdata)
+            if crc != struct.pack(be_int, correct_crc):
+                raise ValueError('invalid crc')
+
+        return ChunkData(chunktype, chunkdata)
+
+    def to_fd(self, fd: BytesIO) -> None:
+        fd.write(struct.pack(be_int, len(self.chunkdata)))
+        fd.write(self.chunktype)
+        fd.write(self.chunkdata)
+        crc = zlib.crc32(self.chunktype + self.chunkdata)
+        fd.write(struct.pack(be_int, crc))
+
+
+def get_png_chunks(fd: BytesIO) -> Iterable[ChunkData]:
+    if fd.read(8) != png_header:
+        raise ValueError('not a PNG')
+
+    while True:
+        chunk = ChunkData.from_fd(fd, True)
+        yield chunk
+        if chunk.chunktype == b'IEND':
             break
 
     remaining = fd.read(1)
@@ -49,11 +68,29 @@ def chunks_to_file(fd: BytesIO, it: Iterable[ChunkData]) -> None:
             fd.write(chunk.chunkdata)
             break
 
-        fd.write(struct.pack(be_int, len(chunk.chunkdata)))
-        fd.write(chunk.chunktype)
-        fd.write(chunk.chunkdata)
-        crc = zlib.crc32(chunk.chunktype + chunk.chunkdata)
-        fd.write(struct.pack(be_int, crc))
+        chunk.to_fd(fd)
+
+
+def dedup(it: Iterable[str]) -> Iterable[str]:
+    prev = None
+    count = 1
+
+    for s in it:
+        if prev is None:
+            prev = s
+            continue
+
+        if prev == s:
+            count += 1
+            continue
+
+        yield prev if count == 1 else f'{prev} x {count}'
+
+        count = 1
+        prev = s
+
+    if prev is not None:
+        yield prev if count == 1 else f'{prev} x {count}'
 
 
 def main() -> None:
@@ -66,8 +103,8 @@ def main() -> None:
 
     fname = sys.argv[1]
     with open(fname, 'rb') as fd:
-        for chunk in get_png_chunks(fd):
-            print(f'{chunk.chunktype.decode()} ({len(chunk.chunkdata)} bytes)')
+        for s in dedup(f'{chunk.chunktype.decode()} ({len(chunk.chunkdata)} bytes)' for chunk in get_png_chunks(fd)):
+            print(s)
 
         if len(sys.argv) != 3:
             return
