@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import io
 import os
 import sys
 import struct
@@ -12,6 +11,7 @@ from typing import Iterable
 
 
 be_short = '>H'
+
 
 class Marker(IntEnum):
     SOI = 0xd8
