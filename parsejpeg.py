@@ -6,8 +6,7 @@ import struct
 
 from dataclasses import dataclass
 from enum import IntEnum
-from io import BytesIO
-from typing import Iterable
+from typing import Iterable, BinaryIO
 
 
 be_short = '>H'
@@ -102,7 +101,7 @@ markerlen = {
 }
 
 
-def parse_to_chunks(fd: BytesIO) -> Iterable[DataChunk]:
+def parse_to_chunks(fd: BinaryIO) -> Iterable[DataChunk]:
     # expect SOI first
     first = fd.read(2)
     if first != b'\xff\xd8':
@@ -127,7 +126,7 @@ def parse_to_chunks(fd: BytesIO) -> Iterable[DataChunk]:
         yield DataChunk(Marker.Extra, remaining)
 
 
-def read_chunk(fd: BytesIO) -> DataChunk:
+def read_chunk(fd: BinaryIO) -> DataChunk:
     marker = Marker(fd.read(1)[0])
     section_len = markerlen[marker]
     if section_len is None:
@@ -137,7 +136,7 @@ def read_chunk(fd: BytesIO) -> DataChunk:
     return DataChunk(marker, data)
 
 
-def read_entropy(fd: BytesIO) -> DataChunk:
+def read_entropy(fd: BinaryIO) -> DataChunk:
     fd.seek(-1, os.SEEK_CUR)  # initial byte
     buf = bytearray()
 
@@ -163,7 +162,7 @@ def read_entropy(fd: BytesIO) -> DataChunk:
     return DataChunk(Marker.Entropy, bytes(buf))
 
 
-def rev_parsed(fd: BytesIO, it: Iterable[DataChunk]) -> None:
+def rev_parsed(fd: BinaryIO, it: Iterable[DataChunk]) -> None:
     for chunk in it:
         if chunk.marker == Marker.Entropy:
             fd.write(chunk.data.replace(b'\xff', b'\xff\x00'))

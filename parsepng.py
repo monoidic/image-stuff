@@ -3,9 +3,9 @@
 import zlib
 import struct
 import sys
+import itertools
 
-from io import BytesIO
-from typing import Iterable
+from typing import Iterable, BinaryIO
 from dataclasses import dataclass
 
 png_header = b'\x89PNG\r\n\x1a\n'
@@ -18,7 +18,7 @@ class ChunkData:
     chunkdata: bytes
 
     @staticmethod
-    def from_fd(fd: BytesIO, validate_crc: bool = False) -> 'ChunkData':
+    def from_fd(fd: BinaryIO, validate_crc: bool = False) -> 'ChunkData':
         first = fd.read(4)
         if len(first) != 4:
             raise ValueError('unexpected early end of file')
@@ -36,7 +36,7 @@ class ChunkData:
 
         return ChunkData(chunktype, chunkdata)
 
-    def to_fd(self, fd: BytesIO) -> None:
+    def to_fd(self, fd: BinaryIO) -> None:
         fd.write(struct.pack(be_int, len(self.chunkdata)))
         fd.write(self.chunktype)
         fd.write(self.chunkdata)
@@ -44,7 +44,7 @@ class ChunkData:
         fd.write(struct.pack(be_int, crc))
 
 
-def get_png_chunks(fd: BytesIO) -> Iterable[ChunkData]:
+def get_png_chunks(fd: BinaryIO) -> Iterable[ChunkData]:
     if fd.read(8) != png_header:
         raise ValueError('not a PNG')
 
@@ -60,7 +60,7 @@ def get_png_chunks(fd: BytesIO) -> Iterable[ChunkData]:
         yield ChunkData(b'extra', remaining)
 
 
-def chunks_to_file(fd: BytesIO, it: Iterable[ChunkData]) -> None:
+def chunks_to_file(fd: BinaryIO, it: Iterable[ChunkData]) -> None:
     fd.write(png_header)
 
     for chunk in it:
@@ -69,28 +69,6 @@ def chunks_to_file(fd: BytesIO, it: Iterable[ChunkData]) -> None:
             break
 
         chunk.to_fd(fd)
-
-
-def dedup(it: Iterable[str]) -> Iterable[str]:
-    prev = None
-    count = 1
-
-    for s in it:
-        if prev is None:
-            prev = s
-            continue
-
-        if prev == s:
-            count += 1
-            continue
-
-        yield prev if count == 1 else f'{prev} x {count}'
-
-        count = 1
-        prev = s
-
-    if prev is not None:
-        yield prev if count == 1 else f'{prev} x {count}'
 
 
 def main() -> None:
@@ -103,7 +81,13 @@ def main() -> None:
 
     fname = sys.argv[1]
     with open(fname, 'rb') as fd:
-        for s in dedup(f'{chunk.chunktype.decode()} ({len(chunk.chunkdata)} bytes)' for chunk in get_png_chunks(fd)):
+        for s, iters in itertools.groupby(
+            f'{chunk.chunktype.decode()} ({len(chunk.chunkdata)} bytes)'
+            for chunk in get_png_chunks(fd)
+        ):
+            num_iters = len(list(iters))
+            if num_iters > 1:
+                s = f'{s} x {num_iters}'
             print(s)
 
         if len(sys.argv) != 3:
